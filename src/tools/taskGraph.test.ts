@@ -96,6 +96,15 @@ describe('buildReplanDirective（改动②）', () => {
     expect(out).toContain('up')
     expect(out).toContain('Re-run the verification')
   })
+
+  // stop-hook 看不到「用户已经换了话题」。没有这条守卫，残留节点会被当成当前指令，
+  // 抢在用户的新请求前面重跑旧任务。
+  test('warns that leftover nodes may be stale after the user moved on', () => {
+    const tasks = [record({ id: 't1', subject: '重写 m4a 大屏', status: 'in_progress' })]
+    const out = buildReplanDirective(tasks)!
+    expect(out).toContain('moved on to a different request')
+    expect(out).toContain('Do NOT resume or restart them')
+  })
 })
 
 describe('task graph dependencies', () => {

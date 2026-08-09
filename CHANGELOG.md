@@ -8,6 +8,53 @@
 
 > **1.0.0 发布门槛**（达成后才从 0.x 升到 1.0 并打首个 `git tag v1.0.0`）：
 
+## [0.10.28] - 2026-08-09
+
+### 修复（续跑指令不再沉淀成历史 —— 「做到一半停下，回头重做最早那个任务」）
+
+用户实测症状：连做几个任务后再提新需求，Astraea 执行到一半停住，转头反复重做最初那个任务。
+三个缺陷叠成一个自我强化的闭环，缺一环都不会复现：
+
+- **`stripReminders()` 漏掉数组形式的注入消息（主因，`src/query.ts`）**：它只过滤
+  `typeof content === 'string'` 的用户消息，而五个注入点（截断续写、/goal 续跑、Todo 收尾
+  stop-hook、TaskGraph 重规划、承诺桥接）用的**全是数组 content**，于是一条都没被剥掉，
+  随 `done` 事件沉淀进 `conversationRef`。历史里越堆越多「你还有未完成任务 X」的**伪用户
+  消息**，模型看到的就是用户在反复要求做那个旧任务。现改为 `isEngineDirective()` 判定：
+  `UserMessage.ephemeral` 标记为主、文本前缀（`<system-reminder>` / `[/goal]` / `[system]`）
+  兜底升级前的历史与 transcript 回放。只认「全部 text block 都是指令」的消息——混入
+  `tool_result` 的、`<user_interjection>` 用户插话的、空 content 的一律保留，绝不误删真实输入。
+- **`latestUserText()` 把注入指令当成用户输入（`src/query.ts`）**：它从后往前找
+  `role: 'user'`，而 directive 恰好就是 `role: 'user'` 带 text。结果 `completionAssessor`
+  拿**旧任务**去比对本轮工作，判成 `unfulfilled_commitment`，再注入一条指令把模型拽回旧
+  任务——闭环的第二环。记忆召回 query 与 Phoenix trace 的 input 同样被污染。现跳过指令消息。
+- **TodoWrite 证据门禁没有出口（`src/tools/TodoWriteTool/index.ts`）**：模型收尾想关掉旧
+  任务，却想不起 `toolu_` id（压缩之后尤其如此），报错只说「completed tasks require
+  evidenceRefs」不给任何线索，于是这条 todo 永远卡在 `in_progress`，stop-hook 每轮把它拽
+  回来重做——闭环的第三环。**门禁强度一行未改**，但报错现在附上可引用的 tool_use id 清单
+  （最近 20 条，带工具名）与三条合法退路：保持 pending / 从列表移除 / `todos: []` 清空。
+
+### 变更
+- **所有 stop-hook 文案加「陈旧任务守卫」**（`src/query.ts` 的 `STALE_TASK_GUARD`、
+  `src/services/task-graph.ts` 的 `buildReplanDirective`）：stop-hook 只知道清单里还有没做完
+  的条目，不知道用户早就换了话题。现明确要求——用户已转向就**不要**重启这些条目，先完成
+  用户当前的请求，未尽事项在末尾提一行或直接从清单移除。
+- **`UserMessage` 新增 `ephemeral?: true`**（`src/types/message.ts`）：标记引擎注入的一次性
+  指令，仅对注入的那一轮有效。`toAPIMessage` 只取 `role`/`content`，该字段不会外泄到 API。
+- **TodoWrite description 补充退出路径**：显式说明 evidenceRefs 是 tool_use id，以及绝不能
+  把没做完的任务硬标 completed——要退役陈旧任务就从列表里移除或整体清空。
+
+### 测试
+- 新增 `src/query.directive-hygiene.test.ts`（5 例）：数组 content 指令被剥离、无标记的历史
+  指令按前缀兜底、真实输入/插话/tool_result/混合消息绝不误删、`latestUserText` 越过指令取到
+  真实请求。
+- `TodoWriteTool.test.ts` +4 例：报错列出可引用 id 与退路、无证据时明说、清空列表始终放行。
+- `taskGraph.test.ts` +1 例：重规划指令必须带陈旧任务守卫。
+
+### 已知未处理
+`getTodos` / `getTaskRecords` 是跨用户消息存活的内存单例，话题切换时旧节点不会自动作废。
+本版用文案守卫压住危害，未改状态生命周期——「新用户请求到来时是否自动把上一轮残留任务标为
+陈旧」是产品决策，留待后续。
+
 ## [0.10.27] - 2026-07-15
 
 ### 新增（Langfuse 后端 —— 可观测性桥接从「单后端」变「多后端扇出」）

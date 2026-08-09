@@ -130,3 +130,43 @@ test('does not allow failed tool results to become completion evidence', async (
   expect(result.isError).toBe(true)
   expect(result.output).toContain('Unknown evidenceRefs')
 })
+
+// 证据门禁本身不放宽，但报错必须给出自救路径。否则模型想不起 tool_use id 就把 todo
+// 永远卡在 in_progress，stop-hook 每轮拽它回来重做旧任务（v0.10.27 复读 bug 的第三环）。
+test('evidence failure lists citable ids and legal ways out', async () => {
+  recordToolEvidence(NS, { id: 'toolu_read_1', tool: 'Read', output: 'ok' })
+  recordToolEvidence(NS, { id: 'toolu_bash_2', tool: 'Bash', output: 'ok' })
+  await TodoWriteTool.call({ todos: [baseTodo] }, ctx)
+
+  const result = await TodoWriteTool.call({
+    todos: [{ ...baseTodo, status: 'completed' }],
+  }, ctx)
+
+  expect(result.isError).toBe(true)
+  expect(result.output).toContain('completed tasks require evidenceRefs')
+  expect(result.output).toContain('toolu_read_1')
+  expect(result.output).toContain('toolu_bash_2')
+  expect(result.output).toContain('(Read)')
+  expect(result.output).toContain('todos: []')
+})
+
+test('evidence failure with no registered evidence says so instead of dangling', async () => {
+  await TodoWriteTool.call({ todos: [baseTodo] }, ctx)
+
+  const result = await TodoWriteTool.call({
+    todos: [{ ...baseTodo, status: 'completed' }],
+  }, ctx)
+
+  expect(result.isError).toBe(true)
+  expect(result.output).toContain('No successful tool results are registered yet')
+})
+
+test('clearing a superseded list is always allowed', async () => {
+  await TodoWriteTool.call({ todos: [baseTodo] }, ctx)
+  expect(getTodos(NS)).toHaveLength(1)
+
+  const result = await TodoWriteTool.call({ todos: [] }, ctx)
+
+  expect(result.isError).toBeUndefined()
+  expect(getTodos(NS)).toEqual([])
+})

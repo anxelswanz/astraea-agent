@@ -128,6 +128,15 @@ export function buildReplanDirective(records: TaskRecordState[]): string | null 
 
   lines.push('')
   lines.push('If a node truly cannot be resolved, tell the user explicitly what is blocked and why.')
+  lines.push('')
+  // 陈旧任务守卫：stop-hook 看不到「用户已经换了话题」，缺这句会把上一段对话的残留节点
+  // 当成当前指令，抢在用户的新请求前面重做旧任务。
+  lines.push(
+    'IMPORTANT — check relevance first: if the user has since moved on to a different request, ' +
+      'these nodes are stale. Do NOT resume or restart them, and do not let them displace what the ' +
+      "user just asked for. Finish the user's current request, then say in one line which nodes " +
+      'remain open (or close them out with TaskUpdate) instead of acting on them.',
+  )
   lines.push('</system-reminder>')
   return lines.join('\n')
 }

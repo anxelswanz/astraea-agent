@@ -30,6 +30,11 @@ export interface ToolResultBlock {
 export interface UserMessage {
   role: 'user'
   content: string | (TextBlock | ToolResultBlock)[]
+  // 引擎注入的一次性指令（stop-hook 续跑、目标续跑、截断续写…）。仅对「当轮」有效：
+  // 下次 query() 启动时由 stripReminders 剥离，绝不沉淀进持久历史，否则会被后续轮次
+  // 当成「用户的要求」反复重放（v0.10.27 旧任务复读 bug）。toAPIMessage 只取
+  // role/content，本字段不会外泄到 API。
+  ephemeral?: true
 }
 
 // 助手消息（内部表示）

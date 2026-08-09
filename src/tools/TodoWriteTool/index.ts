@@ -8,12 +8,45 @@
 import { buildTool } from '../Tool.js'
 import type { Tool, ToolCallResult, ToolContext } from '../Tool.js'
 import { getTodos, setTodos, type Todo, type TodoStatus } from '../../services/todo-state.js'
-import { hasToolEvidence } from '../../services/evidence-registry.js'
+import { hasToolEvidence, getToolEvidence } from '../../services/evidence-registry.js'
 
 const STATUS_ICON: Record<TodoStatus, string> = {
   pending: '○',
   in_progress: '◉',
   completed: '✓',
+}
+
+// 校验失败时附给模型的自救指引：能引用哪些 id + 不想完成时怎么合法退出。
+const EVIDENCE_ID_SAMPLE = 20
+
+function recoveryHint(namespace: string, errors: string[]): string {
+  const lines: string[] = []
+
+  if (errors.some(e => /evidenceRefs/.test(e))) {
+    const evidence = getToolEvidence(namespace)
+    if (evidence.length > 0) {
+      const recent = evidence.slice(-EVIDENCE_ID_SAMPLE)
+      const skipped = evidence.length - recent.length
+      lines.push(
+        `Tool result ids you can cite in evidenceRefs${skipped > 0 ? ` (most recent ${recent.length} of ${evidence.length})` : ''}:`,
+      )
+      for (const r of recent) lines.push(`  ${r.id}  (${r.tool})`)
+    } else {
+      lines.push(
+        'No successful tool results are registered yet, so nothing can be marked completed — ' +
+          'do the work first, then cite the ids of the tool calls that prove it.',
+      )
+    }
+    lines.push('')
+  }
+
+  lines.push(
+    'If a task is not actually finished, do not force it to completed. Legal ways out:',
+    '  • keep it as "pending" / "in_progress" and tell the user what remains;',
+    '  • drop it — pass the full list without that task (it is a complete replacement);',
+    '  • pass todos: [] to clear the whole list when it is stale or superseded.',
+  )
+  return lines.join('\n')
 }
 export const TodoWriteTool = buildTool({
   name: 'TodoWrite',
@@ -30,9 +63,11 @@ Rules:
 - Only ONE task can be in_progress at a time
 - Every task requires acceptanceCriteria and verificationCommand
 - A task can only become completed after it was previously in_progress
-- Completed tasks require evidenceRefs that point to successful prior tool results
+- Completed tasks require evidenceRefs — the tool_use ids of successful prior tool calls
 - Mark a task completed IMMEDIATELY after finishing it, not in batches
 - Pass the complete list each time (this replaces the current list entirely)
+- Never force an unfinished task to completed. To retire stale work, omit it from the list,
+  or pass todos: [] to clear the list once it is superseded
 
 Status values: "pending", "in_progress", "completed"
 
@@ -147,7 +182,11 @@ evidence-gated completion, or lifecycle hooks, use TaskCreate/TaskUpdate instead
     }
 
     if (errors.length > 0) {
-      return { output: `Invalid todos:\n${errors.join('\n')}`, isError: true }
+      // 光报「缺 evidenceRefs」会把模型逼进死胡同：它想不起 tool_use id(尤其压缩之后),
+      // 于是这条 todo 永远关不掉,stop-hook 每轮把它当未完成任务重新拽回来。
+      // 所以证据门禁保持不变,但错误里必须带上「可引用的 id」和「合法的退出方式」,
+      // 让模型能自我修正而不是反复撞同一堵墙。
+      return { output: `Invalid todos:\n${errors.join('\n')}\n\n${recoveryHint(namespace, errors)}`, isError: true }
     }
 
     const todos: Todo[] = rawTodos.map(t => ({

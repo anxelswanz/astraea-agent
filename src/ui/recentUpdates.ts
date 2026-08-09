@@ -9,6 +9,19 @@ export interface RecentUpdate {
 
 export const RECENT_UPDATES: RecentUpdate[] = [
   {
+    version: '0.10.28',
+    priority: 220,
+    persistent: false,
+    messages: {
+      en: 'Fixed the loop where a new request would stall halfway and Astraea kept restarting the first task: internal continue-prompts no longer pile up in your conversation history, and stale to-dos can finally be closed out.',
+      zh: '修复了「新任务做到一半停下、反复重做最初那个任务」的循环:引擎注入的续跑指令不再沉淀进对话历史,陈旧的待办也终于关得掉了。',
+      de: 'Behoben: Eine neue Anfrage blieb auf halbem Weg stehen und Astraea startete immer wieder die erste Aufgabe. Interne Fortsetzungs-Anweisungen sammeln sich nicht mehr im Verlauf an, und veraltete To-dos lassen sich endlich abschließen.',
+      fr: 'Corrigé : une nouvelle demande s’arrêtait à mi-chemin et Astraea recommençait sans cesse la première tâche. Les instructions internes de reprise ne s’accumulent plus dans l’historique, et les tâches obsolètes peuvent enfin être clôturées.',
+      es: 'Corregido: una petición nueva se detenía a medias y Astraea reiniciaba una y otra vez la primera tarea. Las instrucciones internas de continuación ya no se acumulan en el historial, y por fin se pueden cerrar las tareas obsoletas.',
+      ko: '새 요청이 중간에 멈추고 Astraea가 처음 작업을 반복하던 문제를 고쳤습니다. 엔진이 주입한 계속 진행 지시가 더 이상 대화 기록에 쌓이지 않으며, 오래된 할 일도 이제 정리할 수 있습니다.',
+    },
+  },
+  {
     version: '0.10.27',
     priority: 210,
     persistent: false,

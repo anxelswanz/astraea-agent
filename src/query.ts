@@ -534,6 +534,7 @@ async function* runQuery(
       if (stopReason === 'max_tokens' && turnCount < turnCap()) {
         const continueMsg: UserMessage = {
           role: 'user',
+          ephemeral: true,
           content: [{ type: 'text', text: buildContinuationDirective() }],
         }
         messages = [...messages, assistantMessage, continueMsg]
@@ -678,6 +679,7 @@ async function* runQuery(
           // 未达成 → 注入继续指令，再跑一轮（不交还控制权）
           const directive: UserMessage = {
             role: 'user',
+            ephemeral: true,
             content: [{ type: 'text', text: buildGoalDirective(goal.condition, decision.reason) }],
           }
           messages = [...messages, assistantMessage, directive]
@@ -698,6 +700,7 @@ async function* runQuery(
           const list = open.map(t => `  - [${t.status}] ${t.content}`).join('\n')
           const directive: UserMessage = {
             role: 'user',
+            ephemeral: true,
             content: [{
               type: 'text',
               text:
@@ -705,8 +708,9 @@ async function* runQuery(
                 `${open.length} unfinished task(s):\n${list}\n\n` +
                 `If the work is genuinely done, call TodoWrite to mark them completed so the user ` +
                 `gets a clear completion signal. If a task is truly not done, leave it as-is and ` +
-                `tell the user explicitly what remains — never silently abandon an in_progress task.\n` +
-                `</system-reminder>`,
+                `tell the user explicitly what remains — never silently abandon an in_progress task.\n\n` +
+                STALE_TASK_GUARD +
+                `\n</system-reminder>`,
             }],
           }
           messages = [...messages, assistantMessage, directive]
@@ -725,6 +729,7 @@ async function* runQuery(
           taskGraphNudged = true
           const directive: UserMessage = {
             role: 'user',
+            ephemeral: true,
             content: [{ type: 'text', text: directiveText }],
           }
           messages = [...messages, assistantMessage, directive]
@@ -751,6 +756,7 @@ async function* runQuery(
             commitmentNudged = true
             const directive: UserMessage = {
               role: 'user',
+              ephemeral: true,
               content: [{
                 type: 'text',
                 text: buildCommitmentDirective(assessment.reason),
@@ -1039,11 +1045,15 @@ async function* runQuery(
   }
 }
 
-// 取最近一条用户消息的文本（跳过纯 tool_result 的 user 消息）—— 召回的 query。
-function latestUserText(msgs: (UserMessage | AssistantMessage)[]): string {
+// 取最近一条**真实**用户消息的文本（跳过纯 tool_result 的 user 消息，以及引擎自己注入的
+// 续跑指令）—— 召回的 query，也是 completionAssessor 判「承诺是否兑现」的对照基准。
+// 若把 stop-hook 注入的 directive 当成用户输入，评估器会拿旧任务去比对新一轮工作，
+// 判成 unfulfilled_commitment 并再注入一条指令，把模型拽回上一个任务（复读 bug 的放大器）。
+export function latestUserText(msgs: (UserMessage | AssistantMessage)[]): string {
   for (let i = msgs.length - 1; i >= 0; i--) {
     const m = msgs[i]
     if (!m || m.role !== 'user') continue
+    if (isEngineDirective(m)) continue
     if (typeof m.content === 'string') return m.content
     const texts = m.content.filter((b): b is TextBlock => b.type === 'text').map(b => b.text)
     if (texts.length > 0) return texts.join('\n')
@@ -1064,14 +1074,42 @@ function recentToolNames(msgs: (UserMessage | AssistantMessage)[], limit = 8): s
   return names
 }
 
-// 剥掉对话数组里的 <system-reminder> 用户消息（reminder 仅每轮新鲜前置，不该持久累积）。
-function stripReminders(
-  msgs: (UserMessage | AssistantMessage)[],
-): (UserMessage | AssistantMessage)[] {
-  return msgs.filter(
-    m => !(m.role === 'user' && typeof m.content === 'string' && m.content.startsWith('<system-reminder>')),
+// 引擎注入的一次性指令判定。两条依据：
+//   1. ephemeral 标记 —— 本进程注入时打的，最可靠；
+//   2. 文本前缀兜底 —— 覆盖标记之前产生的历史消息（升级前的会话、transcript 回放），
+//      以及任何漏打标的注入点。
+// 只认「全部 text block 都是指令」的消息：混入 tool_result 或用户插话（<user_interjection>）
+// 的消息一律保留，绝不误删真实输入。
+const DIRECTIVE_PREFIXES = ['<system-reminder>', '[/goal]', '[system]']
+
+export function isEngineDirective(m: UserMessage | AssistantMessage): boolean {
+  if (m.role !== 'user') return false
+  if (m.ephemeral === true) return true
+  const isDirectiveText = (t: string) => DIRECTIVE_PREFIXES.some(p => t.startsWith(p))
+  if (typeof m.content === 'string') return isDirectiveText(m.content)
+  return (
+    m.content.length > 0 &&
+    m.content.every(b => b.type === 'text' && isDirectiveText(b.text))
   )
 }
+
+// 剥掉对话数组里引擎注入的一次性指令（reminder / stop-hook 续跑指令 / 截断续写指令）。
+// 这些只对注入的那一轮有意义：留在历史里会被后续轮次当成「用户反复要求做旧任务」，
+// 表现为「新任务做到一半停下，回头重做最早那个任务」。
+export function stripReminders(
+  msgs: (UserMessage | AssistantMessage)[],
+): (UserMessage | AssistantMessage)[] {
+  return msgs.filter(m => !isEngineDirective(m))
+}
+
+// ───────────────────── 陈旧任务守卫（所有 stop-hook 共用）─────────────────────
+// stop-hook 只知道「清单里还有没做完的条目」，不知道用户早就换了话题。缺了这句，模型
+// 会把上一段对话的残留任务当成当前指令，放下用户刚提的新问题回去重做旧任务。
+export const STALE_TASK_GUARD =
+  'IMPORTANT — check relevance first: if the user has since moved on to a different request, ' +
+  'these leftover items are stale. Do NOT resume or restart them, and do not let them displace ' +
+  "what the user just asked for. Finish the user's current request, and mention the unfinished " +
+  'items in one line at the end (or drop them from the list) instead of acting on them.'
 
 // ─────────────────────────── /goal 继续指令 ─────────────────────────────────
 // 目标未达成时注入给模型的下一轮指令：把 condition 重申为指令，并带上
