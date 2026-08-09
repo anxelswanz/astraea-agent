@@ -1,6 +1,6 @@
 {
   "name": "astraea",
-  "version": "0.10.26",
+  "version": "0.10.27",
   "module": "index.ts",
   "type": "module",
   "private": true,
@@ -34,6 +34,7 @@
     "@arizeai/phoenix-client": "^6.10.1",
     "@arizeai/phoenix-evals": "^1.0.3",
     "@arizeai/phoenix-otel": "^1.0.2",
+    "@langfuse/otel": "^5.9.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "chalk": "^5",
     "cli-highlight": "^2.1.11",

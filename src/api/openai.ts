@@ -8,7 +8,7 @@ import type { StreamOptions } from './anthropic'
 import type { ToolSchema } from '../tools/Tool'
 import { resolveAppliedEffort, openaiReasoningParam } from './reasoningEffort'
 import { mapOpenAIUsage } from './usageAccounting'
-import { withIdleWatchdog, linkAbort, mapOpenAICompletionToEvents } from './idleWatchdog'
+import { withIdleWatchdog, linkAbort, mapOpenAICompletionToEvents, stripLeakedProtocolTokens } from './idleWatchdog'
 
 let _openaiClient: OpenAI | null = null
 
@@ -230,7 +230,8 @@ async function* streamRawOpenAI(
     }
 
     if (delta.content) {
-      yield { type: 'text', text: delta.content }
+      const text = stripLeakedProtocolTokens(delta.content)
+      if (text) yield { type: 'text', text }
     }
 
     if (delta.tool_calls) {

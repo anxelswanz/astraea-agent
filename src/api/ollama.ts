@@ -7,7 +7,7 @@ import { config } from '../config'
 import type { Message, StreamEvent } from '../types/message'
 import type { StreamOptions } from './anthropic'
 import type { ToolSchema } from '../tools/Tool'
-import { withIdleWatchdog, linkAbort, mapOpenAICompletionToEvents } from './idleWatchdog'
+import { withIdleWatchdog, linkAbort, mapOpenAICompletionToEvents, stripLeakedProtocolTokens } from './idleWatchdog'
 
 let _ollamaClient: OpenAI | null = null
 
@@ -166,7 +166,8 @@ async function* streamRawOllama(
 
     // 普通文本
     if (delta.content) {
-      yield { type: 'text', text: delta.content }
+      const text = stripLeakedProtocolTokens(delta.content)
+      if (text) yield { type: 'text', text }
     }
 
     // 工具调用分片：OpenAI 把 arguments 也做了流式分片

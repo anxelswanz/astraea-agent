@@ -95,6 +95,9 @@ import {
 // QueryEvent 是 StreamEvent 的超集：增加了 turn_start、tool_result、budget_stop
 export type QueryEvent =
   | StreamEvent
+  // 可观测性根 trace 已开：带出 W3C traceId，供调用方回挂 Langfuse score / 关联外部 eval。
+  // 仅在 Phoenix/Langfuse 实际激活时发一次；未启用时整个事件不出现。
+  | { type: 'trace_start'; traceId: string; sessionId: string }
   | { type: 'turn_start'; turn: number; flushPrev: boolean }
   | { type: 'tool_progress'; id: string; name: string; chunk: string }
   | { type: 'tool_result'; id: string; name: string; input: Record<string, unknown>; output: string; isError: boolean }
@@ -158,6 +161,11 @@ export async function* query(
     sessionId: options.agentId ?? 'default',
     input: latestUserText(initialMessages),
   })
+  // 把 traceId 吐给调用方：这是给 trace 挂 Langfuse score 的唯一入口
+  // （langfuse.score.create({ traceId, … })）。未启用可观测性时不发，消费方无需改动。
+  if (phoenixTrace?.traceId) {
+    yield { type: 'trace_start', traceId: phoenixTrace.traceId, sessionId: phoenixTrace.sessionId }
+  }
   let phoenixStatus: 'error' | undefined
   try {
     yield* runQuery(initialMessages, tools, options, phoenixTrace)

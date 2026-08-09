@@ -15,7 +15,7 @@ import {
   deepseekIsV4,
   deepseekThinkingParam,
 } from './reasoningEffort'
-import { withIdleWatchdog, linkAbort, mapOpenAICompletionToEvents } from './idleWatchdog'
+import { withIdleWatchdog, linkAbort, mapOpenAICompletionToEvents, stripLeakedProtocolTokens } from './idleWatchdog'
 
 function createClient(): OpenAI {
   return new OpenAI({
@@ -165,7 +165,8 @@ async function* streamRawDeepSeek(
     }
 
     if (delta.content) {
-      yield { type: 'text', text: delta.content }
+      const text = stripLeakedProtocolTokens(delta.content)
+      if (text) yield { type: 'text', text }
     }
 
     if (delta.tool_calls) {

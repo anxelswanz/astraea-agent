@@ -15,6 +15,19 @@ import type OpenAI from 'openai'
 import { config } from '../config'
 import type { StreamEvent, StopReason } from '../types/message'
 
+// 某些 OpenAI 兼容 provider（尤其 DeepSeek/Kimi 系模型经第三方中转）在 function-calling
+// 语法失配时，会把 tool-call 协议控制 token（半角 `<|xxx|>` ChatML 式，或全角 `<｜xxx｜>`
+// DeepSeek/Kimi 式，`▁` 代表 token 内的下划线/空格）当普通文本吐进 delta.content，
+// 而不是走结构化的 tool_calls 字段。这类 token 从未出现在正常的 assistant 输出里
+// （散文/代码都不会用竖线包裹尖括号），原样透传会把协议噪音当成真实回复渲染给用户。
+// 用宽松但保守的正则整段剥离：要求首尾都是竖线紧贴尖括号，中间不允许再出现 <>，
+// 避免误伤含 `<` `>` 的正常代码片段。
+const LEAKED_PROTOCOL_TOKEN = /<\/?[|｜][^<>\n]{0,80}[|｜]>/g
+
+export function stripLeakedProtocolTokens(text: string): string {
+  return text.replace(LEAKED_PROTOCOL_TOKEN, '')
+}
+
 /**
  * 把外部 AbortSignal 桥接到两路内部 AbortController：
  *  - signal          传给流式 SDK（.stream(..., { signal })）；
@@ -158,7 +171,8 @@ export function mapOpenAICompletionToEvents(
   const truncated = finishReason === 'length'
 
   if (choice?.message.content) {
-    events.push({ type: 'text', text: choice.message.content })
+    const text = stripLeakedProtocolTokens(choice.message.content)
+    if (text) events.push({ type: 'text', text })
   }
   for (const tc of choice?.message.tool_calls ?? []) {
     if (tc.type !== 'function') continue

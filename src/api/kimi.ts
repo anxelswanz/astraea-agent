@@ -12,7 +12,7 @@ import type { Message, StreamEvent } from '../types/message'
 import type { StreamOptions } from './anthropic'
 import type { ToolSchema } from '../tools/Tool'
 import { mapKimiUsage } from './usageAccounting'
-import { withIdleWatchdog, linkAbort, mapOpenAICompletionToEvents } from './idleWatchdog'
+import { withIdleWatchdog, linkAbort, mapOpenAICompletionToEvents, stripLeakedProtocolTokens } from './idleWatchdog'
 
 function createClient(): OpenAI {
   return new OpenAI({
@@ -149,7 +149,8 @@ async function* streamRawKimi(
     }
 
     if (delta.content) {
-      yield { type: 'text', text: delta.content }
+      const text = stripLeakedProtocolTokens(delta.content)
+      if (text) yield { type: 'text', text }
     }
 
     if (delta.tool_calls) {

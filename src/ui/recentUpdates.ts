@@ -9,6 +9,19 @@ export interface RecentUpdate {
 
 export const RECENT_UPDATES: RecentUpdate[] = [
   {
+    version: '0.10.27',
+    priority: 210,
+    persistent: false,
+    messages: {
+      en: 'Traces can now go to Langfuse as well as Phoenix (or both at once), and a new eval layer catches agents that loop, get stuck, or burn turns without making progress.',
+      zh: '追踪数据现在可以发往 Langfuse,也可以和 Phoenix 同时双写;新增的评测层能抓出打转、卡死、空烧 turn 却毫无进展的轨迹。',
+      de: 'Traces können jetzt zusätzlich zu Phoenix auch an Langfuse gehen (oder an beide gleichzeitig), und eine neue Eval-Schicht erkennt Agenten, die sich im Kreis drehen, feststecken oder Turns ohne Fortschritt verbrauchen.',
+      fr: 'Les traces peuvent désormais être envoyées à Langfuse en plus de Phoenix (ou aux deux à la fois), et une nouvelle couche d’évaluation détecte les agents qui tournent en rond, se bloquent ou consomment des tours sans progresser.',
+      es: 'Las trazas ahora pueden enviarse a Langfuse además de a Phoenix (o a ambos a la vez), y una nueva capa de evaluación detecta agentes que dan vueltas, se atascan o queman turnos sin avanzar.',
+      ko: '이제 추적 데이터를 Phoenix와 함께 Langfuse로도(또는 양쪽 동시에) 보낼 수 있으며, 새 평가 계층이 제자리를 맴돌거나 멈추거나 진전 없이 턴만 소모하는 에이전트를 잡아냅니다.',
+    },
+  },
+  {
     version: '0.10.26',
     priority: 200,
     persistent: false,

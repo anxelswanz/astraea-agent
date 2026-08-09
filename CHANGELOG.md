@@ -8,6 +8,44 @@
 
 > **1.0.0 发布门槛**（达成后才从 0.x 升到 1.0 并打首个 `git tag v1.0.0`）：
 
+## [0.10.27] - 2026-07-15
+
+### 新增（Langfuse 后端 —— 可观测性桥接从「单后端」变「多后端扇出」）
+- **`src/observability/phoenix/client.ts` 支持 Langfuse**：配 `LANGFUSE_PUBLIC_KEY` +
+  `LANGFUSE_SECRET_KEY` 即启用,与 `PHOENIX_ENABLED=1` 可单开可双开。实现方式是把两个后端
+  做成挂在同一个 provider 上的两个 SpanProcessor（`register({ spanProcessors: [...] })`）,
+  同一份 span 扇出到两边,tracing.ts 的建 span 逻辑一行没动。
+  可选配置:`LANGFUSE_BASE_URL`(默认 cloud.langfuse.com)、`LANGFUSE_TRACING_ENVIRONMENT`、
+  `LANGFUSE_BATCH`(默认即时导出,与 PHOENIX_BATCH 对齐)、`LANGFUSE_FLUSH_AT/FLUSH_INTERVAL/TIMEOUT`。
+- **属性双写（`tracing.ts`）**：Langfuse 与 OpenInference 的核心属性名天然重合——
+  `session.id`/`user.id`/`input.value`/`output.value`/`llm.model_name`/`llm.token_count.*`
+  两边都认,无需翻译。只补两处:①`langfuse.observation.type`(Langfuse 不读
+  `openinference.span.kind`,AGENT/LLM/TOOL → agent/generation/tool);②metadata 按 key 铺平成
+  `langfuse.{trace,observation}.metadata.<k>`(塞 JSON 串只会落进不可筛选的 metadata.attributes)。
+  另补 `langfuse.observation.completion_start_time` 供 Langfuse 算 TTFT。补写对 Phoenix 无害。
+- **`PhoenixTrace.traceId` + `trace_start` 事件**：query() 在根 trace 建好后 yield
+  `{ type:'trace_start', traceId, sessionId }`。这是给 trace 回挂 Langfuse score
+  (`score.create({ traceId, … })`)、关联外部 eval 的唯一入口,此前 traceId 没有出口。
+  未启用可观测性时该事件不发,消费方无需改动。
+- **`src/observability/phoenix/langfuse.test.ts`**：起假 OTLP 收集器做端到端回归——
+  断言请求真的发出、Basic auth、两边词汇齐全、脱敏红线(密钥/文件内容不外泄)、双写扇出、
+  未配置时全程 no-op。
+
+### 修复
+- **`shouldExportSpan` 静默丢 span（接入 Langfuse 时必踩）**：LangfuseSpanProcessor 的默认
+  过滤器是 `isLangfuseSpan || isGenAISpan || isKnownLLMInstrumentor`,astraea 手工建的 span
+  三条全不满足(tracer 名是 'astraea'、用 OpenInference 的 `llm.*` 而非 `gen_ai.*`、非自动
+  埋点),会被**静默**丢光——不报错,面板永远空着。现显式 `shouldExportSpan: () => true`,
+  并有变异测试守着(删掉该行 → 测试立刻红)。
+- **`initPhoenix()` 的 latch 会永久锁死可观测性**：此前「一个后端都没配」时也会置
+  `initialized = true`,导致任何在 env 就绪前调过 initPhoenix() 的路径都会让整个进程的
+  可观测性再也起不来(且无声无息)。现只有真正尝试初始化了才 latch。
+- **`shutdownPhoenix()` 未复位 `initialized`**：关掉之后再也开不起来。现一并复位,
+  让 shutdown 真正回到「未初始化」状态。
+- **关闭 Langfuse 媒体上传**（`mediaUploadEnabled: false`）：astraea 进 span 的都是脱敏后的
+  纯文本,不可能有 base64 媒体;且媒体扫描按前缀匹配会扫到我们铺平的 metadata.<key>,遇到
+  非字符串值(isError 是 boolean、ttft_ms 是 number)就每个 span 刷两条 WARN。
+
 ## [0.10.26] - 2026-07-14
 
 ### 新增（Retry / 熔断 / Fallback + fail-closed 收口 —— 可靠性审计 PR-4,审计四批次完结）

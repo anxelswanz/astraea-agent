@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test'
-import { withIdleWatchdog, linkAbort, mapAnthropicMessageToEvents, mapOpenAICompletionToEvents } from './idleWatchdog'
+import { withIdleWatchdog, linkAbort, mapAnthropicMessageToEvents, mapOpenAICompletionToEvents, stripLeakedProtocolTokens } from './idleWatchdog'
 import type { StreamEvent } from '../types/message'
 import type { Message as SDKMessage } from '@anthropic-ai/sdk/resources/messages'
 import type OpenAI from 'openai'
@@ -224,4 +224,32 @@ test('mapOpenAICompletionToEvents：arguments 非法 JSON → incomplete', () =>
   } as unknown as OpenAI.Chat.ChatCompletion
   const events = mapOpenAICompletionToEvents(resp, { input_tokens: 0, output_tokens: 0 })
   expect(events[0]).toEqual({ type: 'tool_use', id: 'c2', name: 'X', input: {}, incomplete: true })
+})
+
+// 回归：DeepSeek/Kimi 等模型在 function-calling 语法失配时，把 tool-call 协议控制 token
+// 当普通文本吐进 content——这些 token 不该被当成助手的真实回复展示给用户。
+test('stripLeakedProtocolTokens：剥离 DeepSeek/Kimi 全角竖线 token', () => {
+  const raw = '<｜tool▁calls▁begin｜>正文<｜tool▁call▁end｜>continue'
+  expect(stripLeakedProtocolTokens(raw)).toBe('正文continue')
+})
+
+test('stripLeakedProtocolTokens：剥离 ChatML 半角竖线 token', () => {
+  const raw = '<|im_start|>hello<|im_end|>'
+  expect(stripLeakedProtocolTokens(raw)).toBe('hello')
+})
+
+test('stripLeakedProtocolTokens：正常文本原样保留', () => {
+  const raw = '这是一段普通回复，包含 | 竖线 但不是 token，也有 <div> 标签。'
+  expect(stripLeakedProtocolTokens(raw)).toBe(raw)
+})
+
+test('mapOpenAICompletionToEvents：content 剥离后为空则不产出 text 事件', () => {
+  const resp = {
+    choices: [{
+      message: { content: '<｜tool▁calls▁begin｜><｜tool▁call▁end｜>', tool_calls: [] },
+      finish_reason: 'stop',
+    }],
+  } as unknown as OpenAI.Chat.ChatCompletion
+  const events = mapOpenAICompletionToEvents(resp, { input_tokens: 0, output_tokens: 0 })
+  expect(events.find(e => e.type === 'text')).toBeUndefined()
 })
