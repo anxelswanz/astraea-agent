@@ -107,6 +107,8 @@ export type QueryEvent =
   | { type: 'goal_evaluated'; met: boolean; reason: string; condition: string; turns: number }
   // /goal 撞安全闸被强制停止。cause 区分原因：turn 上限 / token 天花板 / 停滞。
   | { type: 'goal_exhausted'; reason: string; condition: string; cause: 'turns' | 'tokens' | 'stall'; maxTurns: number; maxTokens: number }
+  // 行动承诺桥接用尽：模型连续多轮只复述计划、不发工具调用。宁可吵，也不要静默停。
+  | { type: 'commitment_exhausted'; attempts: number; reason: string }
   // ── 上下文压缩（autocompact）事件 ──
   | { type: 'compact_start'; trigger: 'auto' | 'manual'; preTokens: number }
   | { type: 'compact_progress'; chars: number }
@@ -144,6 +146,11 @@ export interface QueryOptions {
 // 简单任务 1~2 轮就结束，根本到不了 10 轮，只有真正的长任务才会被提醒。
 const TODO_REMINDER_TURNS_SINCE_WRITE = 10
 const TODO_REMINDER_TURNS_BETWEEN = 10
+
+// 行动承诺桥接的最大次数。1 次太少（模型卡在复述循环里时第二次起就无人挽救，引擎直接
+// 把纯文本当最终回复交还）；无限次则会在模型真的无路可走时空烧 token。3 次配合逐级
+// 加压的措辞，够把「只说不做」拽回执行，又不至于失控。
+const COMMITMENT_MAX_NUDGES = 3
 
 // ─────────────────────────── 主函数 ─────────────────────────────────────────
 
@@ -254,8 +261,11 @@ async function* runQuery(
   let todoNudged = false
   // TaskGraph re-plan Stop-hook（改动②）同样只提醒一次，绝不死循环
   let taskGraphNudged = false
-  // 自然语言行动承诺只桥接一次；唤回后要求模型转入 Todo/Task 的结构化约束。
-  let commitmentNudged = false
+  // 自然语言行动承诺的桥接次数。只救一次是不够的：模型卡在「复述计划不动手」的循环里时，
+  // 第二次起就没人管，引擎直接把纯文本当最终回复交还 —— 用户看到的就是「跑二三十秒就停」。
+  // 改为有限次逐级加压，用尽后不静默停止，而是明确告诉用户它空转了几轮。
+  let commitmentNudges = 0
+  let lastCommitmentReason = ''
   // 周期性 TodoWrite 提醒的两个游标：lastTodoActivityTurn=0 表示「尚未用过」，到第 N 轮即
   // 触发首次提醒；lastTodoReminderTurn 让两次提醒至少隔 N 轮（详见 TODO_REMINDER_* 常量）。
   let lastTodoActivityTurn = 0
@@ -741,7 +751,7 @@ async function* runQuery(
       // 模型可能只输出“开始执行”之类的 pre-action intent，却没有真正调用工具。
       // 结构化任务为空时 Goal/Todo/TaskGraph 都看不见这笔行动债务，因此在最终 done 前
       // 用一次语义分类把未兑现承诺桥接回下一轮，并要求后续转入结构化任务追踪。
-      if (compactionEnabled && !commitmentNudged && turnCount < turnCap()) {
+      if (compactionEnabled && commitmentNudges < COMMITMENT_MAX_NUDGES && turnCount < turnCap()) {
         const assistantText = assistantMessage.content
           .filter((block): block is TextBlock => block.type === 'text')
           .map(block => block.text)
@@ -753,19 +763,30 @@ async function* runQuery(
             signal: options.abortSignal,
           })
           if (assessment.verdict === 'unfulfilled_commitment') {
-            commitmentNudged = true
+            commitmentNudges++
             const directive: UserMessage = {
               role: 'user',
               ephemeral: true,
               content: [{
                 type: 'text',
-                text: buildCommitmentDirective(assessment.reason),
+                text: buildCommitmentDirective(assessment.reason, commitmentNudges),
               }],
             }
             messages = [...messages, assistantMessage, directive]
             turnCount++
+            lastCommitmentReason = assessment.reason
             continue
           }
+        }
+      }
+
+      // 加压用尽仍在空转 → 绝不静默交还控制权。用户看到的「跑一会儿就停」多半停在这里，
+      // 说清楚它空转了几轮、guard 给的最后理由是什么，用户才知道该继续催还是换个说法。
+      if (commitmentNudges >= COMMITMENT_MAX_NUDGES) {
+        yield {
+          type: 'commitment_exhausted',
+          attempts: commitmentNudges,
+          reason: lastCommitmentReason,
         }
       }
 

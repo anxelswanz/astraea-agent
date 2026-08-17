@@ -9,6 +9,19 @@ export interface RecentUpdate {
 
 export const RECENT_UPDATES: RecentUpdate[] = [
   {
+    version: '0.10.29',
+    priority: 230,
+    persistent: false,
+    messages: {
+      en: 'Fixed Astraea stopping after a few seconds of just narrating the plan: it now gets pushed back into action up to three times, and if it still stalls it says so out loud instead of quietly handing control back.',
+      zh: '修复了「只叙述计划、跑几十秒就自己停」的问题:现在最多会被推回执行三次,措辞逐级加码;仍然空转就明说,不再悄悄交还控制权。',
+      de: 'Behoben: Astraea hörte nach wenigen Sekunden auf und beschrieb nur noch den Plan. Jetzt wird bis zu dreimal zum Handeln gedrängt, und wenn es weiterhin stockt, wird das ausdrücklich gemeldet statt stillschweigend abzugeben.',
+      fr: 'Corrigé : Astraea s’arrêtait après quelques secondes en se contentant de décrire le plan. Elle est désormais relancée jusqu’à trois fois, et si elle patine encore, elle le dit au lieu de rendre la main en silence.',
+      es: 'Corregido: Astraea se detenía a los pocos segundos limitándose a narrar el plan. Ahora se la empuja a actuar hasta tres veces y, si sigue atascada, lo dice en vez de devolver el control en silencio.',
+      ko: '계획만 늘어놓다가 몇십 초 만에 멈추던 문제를 고쳤습니다. 이제 최대 세 번까지 실행하도록 압박하며, 그래도 공회전하면 조용히 제어를 넘기지 않고 분명히 알립니다.',
+    },
+  },
+  {
     version: '0.10.28',
     priority: 220,
     persistent: false,

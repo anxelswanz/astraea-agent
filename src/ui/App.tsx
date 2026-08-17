@@ -1125,6 +1125,23 @@ export function App() {
               break
             }
 
+            // 只说不做：连续多轮复述计划却没有工具调用，加压用尽后交还控制权。
+            // 必须显式告知——静默停下正是「跑一会儿就自己停了」的用户观感。
+            case 'commitment_exhausted': {
+              flushAssistant()
+              setHistory(prev => [
+                ...prev,
+                {
+                  id: String(entryIdRef.current++),
+                  role: 'assistant',
+                  text:
+                    `⚠ Stopped after ${event.attempts} turns of restating the plan without calling a tool. ` +
+                    `Last check: ${event.reason}`,
+                },
+              ])
+              break
+            }
+
             // ── 上下文压缩事件 ──────────────────────────────────────────────
             case 'compact_start': {
               flushAssistant()

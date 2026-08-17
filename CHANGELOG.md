@@ -8,6 +8,43 @@
 
 > **1.0.0 发布门槛**（达成后才从 0.x 升到 1.0 并打首个 `git tag v1.0.0`）：
 
+## [0.10.29] - 2026-08-17
+
+### 修复（「跑二三十秒就自己停了」—— 空转时无人挽救，且 guard 挂掉会静默放行）
+
+用户实测症状（Linux 新接入环境）：任务做到后半程，Astraea 连续输出「我立即创建剩余页面并
+接线、注册、编译，中途不询问」这类叙述，却一个工具都不发，重复四五次后就停下交还控制权。
+
+- **承诺桥接只救一次（`src/query.ts`）**：`commitmentNudged` 是个一次性 boolean。模型一旦
+  卡进「复述计划 → 不动手」的循环，第二轮起 guard 连评估都不再做（`!commitmentNudged` 把
+  整个 `assessCompletion` 调用都圈在里面），纯文本被直接当成最终回复 `yield done`。改为
+  计数器 `COMMITMENT_MAX_NUDGES = 3`，并**逐级加压**：第一次仍是温和提醒，第二次起换成硬
+  约束——「下一条消息的第一个东西必须是工具调用，不许前言、不许复述记忆和日期、不许再列
+  剩余项」。
+- **guard 不可用时 fail-open 静默放行（`src/services/completion-guard.ts`）**：guard 走的是
+  各 provider 硬编码的小模型（haiku / gpt-4o-mini / …），在自建网关、本地 ollama、模型名不
+  存在的环境里整条链路很容易挂掉；旧实现 catch 到异常和解析失败时一律返回 `complete`，于是
+  模型吐一句「我立即开始」就被放行。新增**不依赖 LLM 的本地启发式兜底** `looksLikeActionPromise()`：
+  中英文行动承诺模式（含「立即**连续**创建」这类夹副词的写法），排除条件句（「如果你确认」）
+  与问句收尾。guard 挂掉时不再无条件放行，而是降级到启发式判定，reason 里标明是降级路径。
+- **用尽加压后不再静默停止**：新增 `commitment_exhausted` 事件，REPL 显式打出
+  「⚠ Stopped after N turns of restating the plan without calling a tool. Last check: …」。
+  用户此前看到的「莫名其妙停了」，现在会说清楚它空转了几轮、guard 的最后判词是什么——
+  guard 链路故障也会在这条消息里露出来。
+
+### 测试
+- 新增 `src/services/completion-guard.test.ts`（10 例）：中英文承诺模式命中、条件句/问句/
+  普通说明不误判、guard 输出垃圾时降级到启发式而非 fail-open、有效判词不被启发式覆盖、
+  单参数旧调用签名兼容、加压措辞随 attempt 升级。
+- `src/query.completion-guard.test.ts` 更新为新契约：一次承诺被续跑后放行；持续空转则加压
+  3 次并发出 `commitment_exhausted`，最后仍以 `done` 收尾。
+
+### 已知未处理
+日志里模型每轮都在复述「今天是 …／记忆已完整核对／系统提醒我 N 个 todo，但我审视相关性后
+发现…」——注入的 reminder（记忆召回、todo 提醒、v0.10.28 的陈旧任务守卫）在长对话里叠加得
+过厚，模型花大量输出跟 reminder 角力而非干活。这次没动 reminder 的注入密度与措辞，属于独立
+的一批调优。
+
 ## [0.10.28] - 2026-08-09
 
 ### 修复（续跑指令不再沉淀成历史 —— 「做到一半停下，回头重做最早那个任务」）
