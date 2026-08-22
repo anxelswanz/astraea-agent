@@ -144,12 +144,21 @@ const IS_WIN = platform() === 'win32'
 // 累加（见 live frame 内的 footerReserve），下面只保留恒定基底；宁可高估，绝不少算。
 const FOOTER_RESERVE_BASE = 3   // ModeInputFrame 上下框线 + 输入行（恒定基底）
 
-// 整屏清除序列（含滚动回溯缓冲）。Ink 的 <Static> 是 append-only：内部用 index 记下
-// 已打印条数，每帧只渲染 items.slice(index)，已落盘的行永不擦除。一旦 history 被整体
-// 替换或缩短（/clear、/resume），旧条目仍留在终端，且新 fresh 条目因 index 卡在旧值而
-// 永不渲染。修复见 wipeStatic：物理清屏 + bump <Static> key 强制重挂载（index 归零重渲，
-// 并触发 Ink 的 onStaticChange 清空 fullStaticOutput）。对齐 ansi-escapes 的 clearTerminal。
-const CLEAR_TERMINAL = IS_WIN ? '\x1b[2J\x1b[0f' : '\x1b[2J\x1b[3J\x1b[H'
+// 清屏序列，分两档 —— 差别只在 \x1b[3J，但这一个转义符是「可恢复」和「不可恢复」的分界线。
+//
+// Ink 的 <Static> 是 append-only：内部用 index 记下已打印条数，每帧只渲染 items.slice(index)，
+// 已落盘的行永不擦除。一旦 history 被整体替换或缩短（/clear、/resume、/rewind、/language），
+// 旧条目仍留在终端，且新条目因 index 卡在旧值而永不渲染。修复见 repaintHistory：清屏 +
+// bump <Static> key 强制重挂载（index 归零重渲，并触发 Ink 的 onStaticChange 清空
+// fullStaticOutput）。
+//
+// CLEAR_SCREEN 只擦可视屏，终端的**滚动回溯缓冲原样保留**——用户往上滚还能看到清屏前的东西。
+// CLEAR_SCROLLBACK 里的 \x1b[3J 会把回溯缓冲一起删掉，xterm / VTE(GNOME Terminal) / Konsole /
+// Alacritty / kitty 都实现了它（macOS Terminal.app 忽略，所以这类事故只在 Linux 上现形）。
+// 删掉的东西没有任何办法找回来，所以它只留给 /clear —— 那是用户明确要求「擦干净」的场合。
+// 其余入口（含终端 resize）一律走 CLEAR_SCREEN。
+const CLEAR_SCREEN     = IS_WIN ? '\x1b[2J\x1b[0f' : '\x1b[2J\x1b[H'
+const CLEAR_SCROLLBACK = IS_WIN ? '\x1b[2J\x1b[0f' : '\x1b[2J\x1b[3J\x1b[H'
 
 export function formatToolArg(name: string, input: Record<string, unknown>): string {
   // 工具头一律单行展示，最终交给 wrap='truncate-end' 的 <Text>，名字永不被从中间拆开。
@@ -839,16 +848,26 @@ export function App() {
   // 普通消息和 /goal 共用同一条流式管线。promptText 是喂给模型的内容，
   // displayText 是在 history 里展示为 "You: …" 的内容（默认与 promptText 相同）。
   // 恢复一个历史会话：重建 conversationRef + history、续写其 transcript、token 计数作废。
-  // 整屏清除 + 强制 <Static> 重挂载 —— 任何「整体替换 history」的入口（非追加）在调用
-  // setHistory 前先调它，否则旧条目残留屏上、新条目又因 Static 的 append-only 语义不渲染。
-  const wipeStatic = useCallback(() => {
-    stdout?.write(CLEAR_TERMINAL)
+  // 清屏 + 强制 <Static> 重挂载 —— 任何「整体替换 history」的入口（非追加）在调用 setHistory
+  // 前先调它，否则旧条目残留屏上、新条目又因 Static 的 append-only 语义不渲染。
+  // clearSeq 默认用 CLEAR_SCREEN：擦可视屏、**保住滚动回溯**。屏上的历史紧接着由重挂载的
+  // <Static> 原样重印回来，所以「看得见的东西」一行不少，用户往上滚也还找得到清屏前的内容。
+  const repaintHistory = useCallback((clearSeq: string = CLEAR_SCREEN) => {
+    stdout?.write(clearSeq)
     setStaticEpoch(e => e + 1)
   }, [stdout])
+  const wipeStatic = useCallback(() => { repaintHistory() }, [repaintHistory])
 
-  // Terminal resize (columns/rows change) -> debounced full-screen redraw; otherwise <Static>
-  // history re-wraps at the old width and ghosts/misaligns. The live frame and input box live
-  // outside <Static> and already re-render reactively with columns; this only repaints scrollback.
+  // 终端尺寸变化（拖拽缩放窗口）→ debounce 后重画一次。
+  //
+  // 这里必须走 CLEAR_SCREEN，绝不能带 \x1b[3J。原来用的是含 3J 的整屏清除，于是在 Linux 上
+  // 拖一次窗口就是一场事故：3J 把终端的滚动回溯删空，屏上的内容也一并没了，而补救只靠紧接着
+  // 那次「重挂载 <Static> 全量重印」——那是 O(整段会话) 的同步 TTY 写（实测 800 轮的会话单次
+  // resize 要吐 212 KB），拖拽期间连着触发好几轮，终端被灌爆、进程卡在阻塞写上；一旦这一步没
+  // 能完整落屏，被 3J 删掉的历史就再也回不来了，只能重开终端。macOS Terminal.app 忽略 3J，
+  // 所以同样的代码在 mac 上看不出问题——这正是它只报在 linux 端的原因。
+  //
+  // 换成 CLEAR_SCREEN 之后，最坏情况也只是屏幕重画一次：回溯缓冲一直在，历史找得回来。
   useResizeRedraw(columns, rows, wipeStatic)
 
   const restoreSession = useCallback((target: SessionSummary) => {
@@ -1594,7 +1613,9 @@ export function App() {
           '◌  signal lost. static cleared.',
         ]
         const clearLine = CLEAR_LINES[Math.floor(Math.random() * CLEAR_LINES.length)]
-        wipeStatic()  // 物理清屏 + 重挂载 Static，否则旧对话残留、welcome/回执不渲染
+        // /clear 是唯一带 \x1b[3J 的入口：用户要的就是「擦干净」，连滚动回溯一起清掉才符合
+        // 预期（对齐 clear(1)）。其余入口走 CLEAR_SCREEN，回溯留着。
+        repaintHistory(CLEAR_SCROLLBACK)  // 清屏 + 重挂载 Static，否则旧对话残留、welcome/回执不渲染
         const fresh: HistoryEntry[] = [{ id: 'welcome', role: 'welcome', text: '' }]
         fresh.push({
           id: String(entryIdRef.current++),

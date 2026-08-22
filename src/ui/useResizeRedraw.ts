@@ -6,6 +6,12 @@
 // and the hand-drawn input-box border breaks too. The fix is to clear the screen + remount
 // <Static> on resize, re-rendering all history at the new size (see App's wipeStatic).
 //
+// What the redraw must NOT do: erase the terminal's scrollback. The clear sequence used here is
+// CLEAR_SCREEN (\x1b[2J\x1b[H) — never CLEAR_SCROLLBACK, whose \x1b[3J deletes the scrollback
+// buffer outright on xterm / VTE / Konsole / Alacritty / kitty (macOS Terminal.app ignores it,
+// which is why the resulting data loss only ever got reported on Linux). Redrawing the screen is
+// recoverable; deleting the user's scrollback is not. See the CLEAR_SCREEN comment in App.tsx.
+//
 // Why it's debounced: dragging a window edge fires dozens of resize events. useWindowSize()
 // already listens for those internally; here we only react to the columns/rows values it produces
 // — a timer (default 150ms) collapses a whole drag into a single trailing onResize. Each further

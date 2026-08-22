@@ -10,10 +10,17 @@
 // Lives in the live (non-Static) region only while booting — never repaints after.
 // Skippable: any keypress finishes immediately. Narrow terminals skip the
 // wordmark phase (start at figure); too narrow even for the goddess → onDone now.
+//
+// 尺寸检查必须**同时看宽和高**。live frame 一旦比终端还高，Ink 会走 renderInteractiveFrame
+// 的 fullscreen 分支：每一帧都写 ansiEscapes.clearTerminal（含 \x1b[3J）+ 全量 static 重印。
+// \x1b[3J 会删掉终端的滚动回溯缓冲，xterm / VTE / Konsole / Alacritty / kitty 都认这个转义符
+// （macOS Terminal.app 忽略）。字标 6 行 + 女神 25 行 + 输入框 3 行 = 34 行，任何不到 35 行的
+// 终端都会中招：启动动画每帧清一次回溯，用户跑 astraea 之前留在终端里的东西全没了，且找不回来。
+// 所以放不下就降级（只播字标 / 直接跳过），绝不画一个比窗口还高的帧。
 
 import React, { useEffect, useRef, useState } from 'react'
-import { useInput, useStdout, Box } from 'ink'
-import { AstraeaWordmark, WORDMARK_WIDTH, fitsWordmark } from './AstraeaWordmark'
+import { useInput, useStdout, useWindowSize, Box } from 'ink'
+import { AstraeaWordmark, WORDMARK_WIDTH, WORDMARK_HEIGHT, fitsWordmark } from './AstraeaWordmark'
 import { AstraeaGoddess, GODDESS_HEIGHT, GODDESS_WIDTH } from './AstraeaGoddess'
 
 const TICK_MS = 40          // wordmark frame interval
@@ -21,14 +28,19 @@ const STEP = 3              // columns the shine advances per frame
 const BAND = 8              // lead/trail padding so the band fully enters & exits
 const START = -BAND
 const FIGURE_TICK_MS = 60   // goddess reveal: one row per frame (~1.5s total)
+// intro 之外这一帧还挂着输入框（上下框线 + 输入行）。宁可多留一行，也不能让整帧超出窗口高度。
+const FOOTER_RESERVE = 4
 
 type Phase = 'wordmark' | 'figure'
 
 export function AstraeaIntro({ onDone }: { onDone: () => void }): React.ReactNode {
   const { stdout } = useStdout()
   const columns = stdout?.columns ?? 80
-  const wordmarkFits = fitsWordmark(columns)
+  const { rows } = useWindowSize()
+  const height = rows ?? 24
+  const wordmarkFits = fitsWordmark(columns) && height >= WORDMARK_HEIGHT + FOOTER_RESERVE
   const goddessFits = columns >= GODDESS_WIDTH
+    && height >= WORDMARK_HEIGHT + GODDESS_HEIGHT + FOOTER_RESERVE
 
   // 窄屏（字标放不下）直接从女神揭示开始；字标放得下则先扫字标。
   const [phase, setPhase] = useState<Phase>(wordmarkFits ? 'wordmark' : 'figure')
