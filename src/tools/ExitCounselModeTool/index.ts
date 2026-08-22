@@ -11,6 +11,7 @@ import { buildTool } from '../Tool.js'
 import type { ToolCallResult, ToolContext } from '../Tool.js'
 import { setMode, getMode } from '../../state/sessionMode.js'
 import { ask } from '../AskUserQuestionTool/bridge.js'
+import { interpretConfirmAnswer } from '../confirmAnswer.js'
 
 export const ExitCounselModeTool = buildTool({
   name: 'ExitCounselMode',
@@ -26,7 +27,8 @@ is unambiguous. It will:
 2. Ask the user to allow execution for this session
 3. If allowed: Astraea switches to CRUISE mode (file writes auto-approved, shell still
    confirmed) and you may begin implementation
-4. If declined: you stay in counsel mode (read-only) and should keep consulting
+4. If declined: you stay in counsel mode (read-only). Ask at most ONE more focused
+   question about what changed, then call this again — do not restart the interview.
 
 The summary parameter must be a brief markdown recap of what you will do if allowed —
 2–4 bullets covering scope, the concrete steps, and how you will verify.`,
@@ -58,37 +60,70 @@ The summary parameter must be a brief markdown recap of what you will do if allo
 
     // 向用户展示方案摘要 + 授权请求。summary 通过 planBody 落成持久化 markdown 历史条目，
     // 即便面板被 ESC 关掉也不丢；面板本身只留精简的是/否提示。
+    const labels = {
+      approve: 'yes — allow this session & switch to cruise',
+      decline: 'no — keep consulting',
+    }
     const answer = await ask([{
       header: 'Execute',
       question: 'Approach confirmed. Allow Astraea to start executing in this session? This switches to cruise mode (file writes auto-approved, shell commands still confirmed).',
-      options: [
-        { label: 'yes — allow this session & switch to cruise' },
-        { label: 'no — keep consulting' },
-      ],
+      options: [{ label: labels.approve }, { label: labels.decline }],
       planBody: summary,
     }])
 
-    // 只匹配 "→ " 之后的实选项，避免对整串子串匹配（问题正文本身含 "Allow"）。
-    const picked = (answer.split('→').pop() ?? answer).trim().toLowerCase()
-    // 空答复（无 UI 监听的非交互模式）保持 counsel 闭合，避免无人授权却自行提权。
-    const allowed = picked.startsWith('yes') || picked.startsWith('y —') || picked === '1' || picked.includes('switch to cruise')
+    // 四态判定（见 confirmAnswer.ts）。旧实现只认 startsWith('yes')，用户 ESC 或自填
+    // 「可以 / 开始吧 / ok」全被读成拒绝，工具再回一句「继续提问」——这正是「一直问、
+    // 不动手」的放大器。现在只有明确拒绝才回到咨询循环。
+    const { verdict, picked } = interpretConfirmAnswer(answer, labels)
 
-    if (allowed) {
+    if (verdict === 'approved') {
       setMode('cruise')
       return {
         output: [
           'Execution allowed. Counsel mode exited — switched to CRUISE mode.',
           'File writes are now auto-approved; shell commands are still confirmed per command.',
           '',
-          'Proceed with implementation as agreed.',
+          'The Counsel Mode section still present in your system prompt is now STALE — you are no',
+          'longer read-only. Do NOT open another AskUserQuestion and do NOT call ExitCounselMode',
+          'again. Start implementing as agreed, using tools.',
         ].join('\n'),
+      }
+    }
+
+    // 用户没表态（ESC / 面板被排空）：这不等于拒绝，更不该触发新一轮问卷。
+    if (verdict === 'cancelled') {
+      return {
+        output: [
+          'The approval panel was dismissed without an answer — the user did not respond.',
+          'Still in counsel mode (read-only). Do NOT open another AskUserQuestion and do NOT',
+          'call ExitCounselMode again on your own. State in one sentence that you are waiting',
+          'for a go-ahead, then stop and hand control back to the user.',
+        ].join('\n'),
+        isError: false,
+      }
+    }
+
+    // 用户自填了别的内容（多半是补充约束，如「先只做第一步」）：直接回应它，别再开问卷。
+    if (verdict === 'unclear') {
+      return {
+        output: [
+          'The user replied with their own text instead of yes/no:',
+          '',
+          picked,
+          '',
+          'Still in counsel mode (read-only). Address what they actually said — do NOT open',
+          'another AskUserQuestion. If their reply narrows the scope, fold it into the plan and',
+          'call ExitCounselMode again with the revised summary; otherwise answer them and stop.',
+        ].join('\n'),
+        isError: false,
       }
     }
 
     return {
       output: [
         'Execution declined. Still in counsel mode (read-only).',
-        'Keep consulting the user with AskUserQuestion, then call ExitCounselMode again when ready.',
+        'Ask at most ONE more focused question about what changed their mind, then call',
+        'ExitCounselMode again with a revised summary. Do not restart the interview.',
       ].join('\n'),
       isError: false,
     }

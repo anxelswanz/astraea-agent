@@ -9,6 +9,7 @@ import type { Tool, ToolCallResult, ToolContext } from '../Tool.js'
 import { restorePreMode, getMode } from '../../state/sessionMode.js'
 import { getPlanFilePath, getPlanSlug } from '../../utils/planSlug.js'
 import { ask } from '../AskUserQuestionTool/bridge.js'
+import { interpretConfirmAnswer } from '../confirmAnswer.js'
 import { writeFileSync } from 'node:fs'
 
 export const ExitOrbitModeTool = buildTool({
@@ -70,20 +71,18 @@ what happens if they approve.`,
     // ── 2. 向用户展示完整计划 + 审批 ──────────────────────────────────────
     // 计划正文通过 planBody 传递：UI 会把它作为一条持久化的 markdown 历史条目落盘
     // （即使审批面板被 ESC 关掉也不会消失），审批面板本身只保留精简的是/否提示。
+    const labels = { approve: 'yes — approve and execute', decline: 'no — revise the plan' }
     const answer = await ask([{
       header: 'Plan',
       question: `Plan ready (saved to ~/.astraea/plans/${slug}.md). Approve and begin implementation?`,
-      options: [
-        { label: 'yes — approve and execute' },
-        { label: 'no — revise the plan' },
-      ],
+      options: [{ label: labels.approve }, { label: labels.decline }],
       planBody: plan,
     }])
 
-    // formatAnswers 返回 "[Plan] <question>\n→ <选项 label>"，问题正文本身含 "Approve"，
-    // 不能对整串做子串匹配（否则两个选项都会被判为通过）。只看 "→ " 之后的实选项。
-    const picked = (answer.split('→').pop() ?? answer).trim().toLowerCase()
-    const approved = picked.startsWith('yes') || picked.startsWith('y —') || picked === '1'
+    // 四态判定（见 confirmAnswer.ts）：只认 startsWith('yes') 会把 ESC 关面板和自填
+    // 「可以 / 开始吧 / ok」全判成拒绝，模型于是回去反复改计划、迟迟不动手。
+    const { verdict, picked } = interpretConfirmAnswer(answer, labels)
+    const approved = verdict === 'approved'
 
     // ── 3. 审批结果处理 ───────────────────────────────────────────────────
     if (approved) {
@@ -101,15 +100,42 @@ what happens if they approve.`,
           'Proceed with implementation as planned.',
         ].join('\n'),
       }
-    } else {
+    }
+
+    // 用户没表态（ESC / 面板被排空）：不是拒绝，别自作主张重开一轮规划。
+    if (verdict === 'cancelled') {
       return {
         output: [
-          'Plan rejected. Still in orbit mode.',
-          '',
-          'Revise your plan and call ExitOrbitMode again when ready.',
+          'The approval panel was dismissed without an answer — the user did not respond.',
+          'Still in orbit mode. Do NOT revise the plan on your own and do NOT call ExitOrbitMode',
+          'again unprompted. Say in one sentence that the plan is waiting for approval, then stop.',
         ].join('\n'),
         isError: false,
       }
+    }
+
+    // 自填了别的内容：多半是对计划的修改意见，按它改，而不是原样重问。
+    if (verdict === 'unclear') {
+      return {
+        output: [
+          'The user replied with their own text instead of yes/no:',
+          '',
+          picked,
+          '',
+          'Still in orbit mode. Treat this as feedback on the plan: revise accordingly and call',
+          'ExitOrbitMode again with the updated plan.',
+        ].join('\n'),
+        isError: false,
+      }
+    }
+
+    return {
+      output: [
+        'Plan rejected. Still in orbit mode.',
+        '',
+        'Revise your plan and call ExitOrbitMode again when ready.',
+      ].join('\n'),
+      isError: false,
     }
   },
 })

@@ -152,6 +152,20 @@ const TODO_REMINDER_TURNS_BETWEEN = 10
 // 加压的措辞，够把「只说不做」拽回执行，又不至于失控。
 const COMMITMENT_MAX_NUDGES = 3
 
+// counsel 提问预算。
+//
+// 为什么必须有：所有「防空转」的 stop-hook（Goal / Todo / TaskGraph / 行动承诺桥接）都挂在
+// `toolUseBlocks.length === 0` 那条分支上——只有模型不调工具、准备交还控制权时才会跑。而
+// AskUserQuestion 是一次 tool call，于是「连问十轮」在引擎眼里全是「有进展」，没有任何守卫
+// 看得见它。counsel 的系统提示又明写着 "Keep asking until the approach is unambiguous. No
+// fixed question count."，退出完全靠模型自觉调 ExitCounselMode。两者叠加，「一直问、一直不
+// 执行」就是稳定态，唯一兜底是 maxTurns=100。
+//
+// SOFT：到这一轮开始每轮加压，要求下一步就走 ExitCounselMode。
+// HARD：到这一轮直接宣告访谈结束——再问下去就不是澄清，是空转。
+const COUNSEL_ASK_SOFT_LIMIT = 4
+const COUNSEL_ASK_HARD_LIMIT = 6
+
 // ─────────────────────────── 主函数 ─────────────────────────────────────────
 
 export async function* query(
@@ -266,6 +280,9 @@ async function* runQuery(
   // 改为有限次逐级加压，用尽后不静默停止，而是明确告诉用户它空转了几轮。
   let commitmentNudges = 0
   let lastCommitmentReason = ''
+  // counsel 模式下本次 query 已经开过几轮 AskUserQuestion（见 COUNSEL_ASK_*_LIMIT）。
+  // 一旦离开 counsel（用户授权切 cruise）即归零，下次再进 counsel 重新计数。
+  let counselAsks = 0
   // 周期性 TodoWrite 提醒的两个游标：lastTodoActivityTurn=0 表示「尚未用过」，到第 N 轮即
   // 触发首次提醒；lastTodoReminderTurn 让两次提醒至少隔 N 轮（详见 TODO_REMINDER_* 常量）。
   let lastTodoActivityTurn = 0
@@ -865,6 +882,16 @@ async function* runQuery(
             isError: true,
           }
         }
+        // 提问预算硬闸：光靠注入指令劝不住一个卡在提问循环里的模型——它下一轮照样开问卷，
+        // 用户照样得面对第 N 个面板。到硬上限后直接拒发，问卷根本不会弹到用户面前。
+        if (ctx.mode === 'counsel' && tool.name === 'AskUserQuestion'
+          && counselAsks >= COUNSEL_ASK_HARD_LIMIT) {
+          return {
+            toolUse,
+            output: `[counsel budget] AskUserQuestion refused — you have already run ${counselAsks} rounds of questions on this task without starting any work. More questions are stalling, not clarifying. Decide the remaining details yourself and call ExitCounselMode now with a summary that states your assumptions; or, if you truly cannot proceed, say what is blocking you in one sentence and stop.`,
+            isError: true,
+          }
+        }
         // 入口统一参数校验（PR-1）：required/type/enum/items 基于工具自带 JSON Schema 拦截,
         // 失败返回可自我修正的结构化错误,不进入 call() —— 杜绝裸断言穿透成原始 TypeError。
         const invalidInput = validateToolInput(tool.name, tool.inputSchema, toolUse.input)
@@ -944,6 +971,16 @@ async function* runQuery(
         })
         continue
       }
+      // 提问预算硬闸（流式路径同样适用），见普通路径处的说明。
+      if (ctx.mode === 'counsel' && tool.name === 'AskUserQuestion'
+        && counselAsks >= COUNSEL_ASK_HARD_LIMIT) {
+        streamingResults.push({
+          toolUse,
+          output: `[counsel budget] AskUserQuestion refused — you have already run ${counselAsks} rounds of questions on this task without starting any work. More questions are stalling, not clarifying. Decide the remaining details yourself and call ExitCounselMode now with a summary that states your assumptions; or, if you truly cannot proceed, say what is blocking you in one sentence and stop.`,
+          isError: true,
+        })
+        continue
+      }
       // 入口统一参数校验（PR-1）：与普通工具路径同一闸,流式工具同样不放过坏参数。
       const invalidStreamInput = validateToolInput(tool.name, tool.inputSchema, toolUse.input)
       if (invalidStreamInput) {
@@ -1018,6 +1055,40 @@ async function* runQuery(
       extraTextBlocks.push({
         type: 'text',
         text: '[Counsel mode enforcement] Counsel mode is strictly read-only — your write/execute action was blocked. You cannot write or run commands here. MANDATORY path to execution: (1) use AskUserQuestion to confirm scope / approach / trade-offs with the user; (2) once the direction is clear, call ExitCounselMode with a brief summary to ask the user for permission. Only after the user allows it (Astraea then switches to cruise mode) may you write or run commands. Do NOT attempt any non-read-only tool until then.',
+      })
+    }
+
+    // ── counsel 提问预算：把「一直问下去」拽回收敛 ─────────────────────────
+    // 计数只在 counsel 里进行（其它模式下提问本来就受 "ask at most once per task" 约束，
+    // 且 stop-hook 都够得着）。离开 counsel 立即归零。
+    if (getMode() !== 'counsel') {
+      counselAsks = 0
+    } else if (allResults.some(r => r.toolUse.name === 'AskUserQuestion')) {
+      counselAsks++
+      if (counselAsks >= COUNSEL_ASK_HARD_LIMIT) {
+        extraTextBlocks.push({
+          type: 'text',
+          text: `[Counsel budget exhausted] You have now run ${counselAsks} rounds of AskUserQuestion in this task without starting any work. The interview is OVER — further questions are stalling, not clarifying. Your next message MUST NOT contain AskUserQuestion. Do exactly one of: (a) call ExitCounselMode with the best plan you can form from what the user has ALREADY told you, choosing sensible defaults for anything still open and stating those assumptions in the summary; or (b) if you genuinely cannot proceed, state the single blocking decision in one sentence and stop.`,
+        })
+      } else if (counselAsks >= COUNSEL_ASK_SOFT_LIMIT) {
+        extraTextBlocks.push({
+          type: 'text',
+          text: `[Counsel convergence] That was round ${counselAsks} of questions. You have enough to act. Do not open another AskUserQuestion unless it is genuinely blocking — decide the remaining details yourself and call ExitCounselMode now with a summary that states your assumptions.`,
+        })
+      }
+    }
+
+    // ── 授权成功后作废 counsel 协议 ───────────────────────────────────────
+    // system prompt 是每条用户消息发起 query 时捕获的一份快照（App.tsx 传 system），
+    // ExitCounselMode 中途把模式切到 cruise 并不会重建它——本次 query 剩下的每一轮，
+    // 模型看到的系统提示里仍写着「你在 COUNSEL 模式、只读、唯一出路是 ExitCounselMode」。
+    // 不显式作废的话，模型会照着那段继续访谈，或再调一次 ExitCounselMode（拿到 "can only
+    // be called when in counsel mode" 报错），于是「批准了还是不动手」。
+    if (allResults.some(r => r.toolUse.name === 'ExitCounselMode' && !r.isError
+      && r.output.startsWith('Execution allowed'))) {
+      extraTextBlocks.push({
+        type: 'text',
+        text: '[Mode change] The user allowed execution — Astraea is now in CRUISE mode. The "Counsel Mode" section in your system prompt is STALE and no longer applies: you are no longer read-only, ExitCounselMode is done, and the interview is over. Do NOT call AskUserQuestion or ExitCounselMode again for this task. Begin implementing now with real tool calls.',
       })
     }
 

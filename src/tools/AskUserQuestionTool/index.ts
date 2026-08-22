@@ -139,9 +139,11 @@ path that needs no user input, or stop and report the pending decision.`,
     const userAnswer = await ask(questions)
 
     if (!userAnswer) {
-      // 交互会话里拿到空答:UI 监听者退订/问题被 /stop 清空 —— 同样不得自行拍板
+      // 交互会话里拿到空答:UI 监听者退订/问题被 /stop 清空 —— 同样不得自行拍板。
+      // 措辞很重要:旧文案是「ask again later」,模型的自然反应就是立刻原样再问一遍,
+      // 于是 ESC 一次换来一轮新问卷。空答案的正确含义是「用户不想回答这个」。
       return {
-        output: '[AskUserQuestion] The question was dismissed without an answer. Do not assume a choice — ask again later or take the conservative path.',
+        output: '[AskUserQuestion] The user dismissed the question without answering. Do NOT ask it again and do NOT invent an answer. Either proceed with the safest default and say which default you took, or state the pending decision in one sentence and stop.',
         isError: true,
       }
     }

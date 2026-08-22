@@ -8,6 +8,48 @@
 
 > **1.0.0 发布门槛**（达成后才从 0.x 升到 1.0 并打首个 `git tag v1.0.0`）：
 
+## [0.10.31] - 2026-08-22
+
+### 修复（「讨论方案一直问下去，然后一直不执行」）
+
+四个原因叠成闭环，全部发生在 counsel 模式里：
+
+- **提问永远不算「空转」，所以没有任何守卫看得见它（主因）**：引擎里所有防空转的 stop-hook
+  —— Goal 钩子、Todo 收尾钩子、TaskGraph 重规划钩子、行动承诺桥接 —— 都挂在 `query.ts` 的
+  `if (toolUseBlocks.length === 0)` 分支上，只有「模型不调工具、准备交还控制权」时才跑。而
+  `AskUserQuestion` 是一次 tool call，于是「连问十轮」在引擎眼里全是有进展，唯一兜底是
+  `maxTurns: 100`。counsel 的系统提示又明写着 "Keep asking until the approach is unambiguous.
+  No fixed question count."，退出完全靠模型自觉调 `ExitCounselMode`。
+  修复：新增 counsel 提问预算 `COUNSEL_ASK_SOFT_LIMIT=4` / `COUNSEL_ASK_HARD_LIMIT=6`。第 4 轮
+  起每轮注入收敛指令；到第 6 轮宣告访谈结束，并在框架层**直接拒发** `AskUserQuestion`——第 7 个
+  问卷根本弹不到用户面前。系统提示同步改为「最多 3 轮问卷，剩下的自己定并在摘要里写明假设」。
+- **用户说「可以」会被读成「拒绝」**：`ExitCounselMode` / `ExitOrbitMode` 用
+  `picked.startsWith('yes')` 判定放行。实测下来，ESC 关面板、✎ 自填「可以 / 开始吧 / 同意 /
+  ok / go」全部落进 else 被判成拒绝，工具再回一句 "keep consulting the user with
+  AskUserQuestion" —— 用户明明已经点头，却换来新一轮提问。
+  修复：抽出 `src/tools/confirmAnswer.ts`，四态判定（approved / declined / **cancelled** /
+  unclear）：先按选项 label 锚定匹配，再走中英文肯定/否定词表（否定优先，「不可以」不会被读成
+  「可以」）。空答案单独归类为 cancelled —— 用户没表态不等于拒绝，工具改为「说一句在等授权然后
+  停下」，不再触发追问；自填的补充指令归为 unclear，原文回传让模型直接回应。
+- **ESC 掉问题面板的返回文案在鼓励再问一遍**：原文是 "The question was dismissed without an
+  answer. Do not assume a choice — **ask again later**"，模型的自然反应就是原样再问。改为
+  「不要重复提问，要么取安全默认值并说明，要么把待决事项说清楚然后停下」。
+- **批准之后 counsel 协议还在系统提示里**：system prompt 是每条用户消息发起 query 时捕获的
+  快照（`App.tsx` 把 `systemPrompt` 传给 `query`），`ExitCounselMode` 中途 `setMode('cruise')`
+  并不会重建它。于是本次 query 剩下的每一轮，模型看到的仍是「你在 COUNSEL 模式、只读、唯一出路
+  是 ExitCounselMode」——照着继续访谈，或再调一次 `ExitCounselMode` 拿到 "can only be called
+  when in counsel mode" 报错。修复：授权成功后向下一轮注入 `[Mode change]` 指令显式作废该段。
+
+回归覆盖：`src/tools/confirmAnswer.test.ts`（42 例，锁死「点头被判成拒绝」）、
+`src/query.counsel-budget.test.ts`（mock 模型每轮开问卷，断言 1–3 轮不打扰、第 4 轮加压、
+第 6 轮截断、第 7 轮起面板不再弹出、非 counsel 模式不受影响）。
+
+### 说明
+
+`src/ui/recentUpdates.ts` 里「模糊任务 → Counsel」的文案与实现不符：全仓 `setMode('counsel')`
+只有用户手动入口（`/mode`、ModeSelector、Shift+Tab 循环），没有任何「模糊任务自动进 counsel」
+的逻辑。本次未改该文案，留待产品决定是补实现还是改措辞。
+
 ## [0.10.30] - 2026-08-22
 
 ### 修复（Linux：拖拽缩放终端窗口后，窗口内容消失且几乎无法恢复）

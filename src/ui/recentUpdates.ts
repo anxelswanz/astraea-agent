@@ -9,6 +9,32 @@ export interface RecentUpdate {
 
 export const RECENT_UPDATES: RecentUpdate[] = [
   {
+    version: '0.10.31',
+    priority: 250,
+    persistent: false,
+    messages: {
+      en: 'Fixed plan discussions that kept asking and never started: the interview now has a budget, answering the approval panel in your own words ("ok", "可以") counts as a yes instead of a refusal, and dismissing a panel no longer triggers another round of questions.',
+      zh: '修复了「讨论方案一直问下去、就是不动手」:访谈现在有轮次预算,授权面板上用自己的话回答(「可以」「ok」)会被当成同意而不是拒绝,ESC 关掉面板也不再换来新一轮问卷。',
+      de: 'Behoben: Planungsgespräche, die endlos nachfragten und nie starteten. Das Interview hat jetzt ein Budget, eine Freigabe in eigenen Worten („ok", „可以") zählt als Ja statt als Ablehnung, und das Schließen eines Dialogs löst keine weitere Fragerunde mehr aus.',
+      fr: 'Corrigé : les discussions de plan qui posaient question sur question sans jamais démarrer. L’entretien a désormais un budget, répondre à la validation avec vos propres mots (« ok », « 可以 ») vaut oui et non refus, et fermer un panneau ne déclenche plus une nouvelle série de questions.',
+      es: 'Corregido: las discusiones de plan que seguían preguntando sin empezar nunca. La entrevista ahora tiene un presupuesto, responder a la aprobación con tus propias palabras («ok», «可以») cuenta como sí en vez de rechazo, y descartar un panel ya no provoca otra ronda de preguntas.',
+      ko: '방안을 논의하다 계속 질문만 하고 시작하지 않던 문제를 고쳤습니다. 이제 인터뷰에 횟수 예산이 있고, 승인 패널에 직접 쓴 말(«ok», «가능»)도 거절이 아니라 승낙으로 처리되며, 패널을 닫아도 새 질문이 이어지지 않습니다.',
+    },
+  },
+  {
+    version: '0.10.30',
+    priority: 240,
+    persistent: false,
+    messages: {
+      en: 'Fixed the Linux bug where resizing the terminal window wiped the screen and the scrollback for good — your history now survives a resize, and the startup animation no longer clears whatever was already in your terminal.',
+      zh: '修复了 Linux 上「拖拽缩放终端窗口后内容消失、几乎找不回来」的问题:缩放不再清空滚动回溯,启动动画也不会再把你终端里原有的内容抹掉。',
+      de: 'Behoben: Unter Linux löschte das Ändern der Terminalgröße Bildschirm und Scrollback endgültig. Der Verlauf übersteht jetzt eine Größenänderung, und die Startanimation löscht nicht mehr, was bereits im Terminal stand.',
+      fr: 'Corrigé : sous Linux, redimensionner la fenêtre du terminal effaçait définitivement l’écran et l’historique de défilement. L’historique survit désormais à un redimensionnement, et l’animation de démarrage n’efface plus ce qui était déjà dans le terminal.',
+      es: 'Corregido: en Linux, redimensionar la ventana del terminal borraba la pantalla y el historial de desplazamiento para siempre. Ahora el historial sobrevive al cambio de tamaño, y la animación de inicio ya no borra lo que ya había en tu terminal.',
+      ko: 'Linux에서 터미널 창 크기를 조절하면 화면과 스크롤백이 영구히 지워지던 문제를 고쳤습니다. 이제 크기를 바꿔도 기록이 남고, 시작 애니메이션이 터미널에 있던 내용을 지우지 않습니다.',
+    },
+  },
+  {
     version: '0.10.29',
     priority: 230,
     persistent: false,
